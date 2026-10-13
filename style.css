@@ -1,0 +1,122 @@
+:root {
+  --bg: #0d1117;
+  --bg2: #161b27;
+  --card: #1c2333;
+  --card-hover: #232c40;
+  --text: #e6e9f0;
+  --muted: #8b93a7;
+  --accent: #6c8cff;
+  --accent2: #38e1c2;
+  --danger: #ff5c7a;
+  --radius: 12px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg); color: var(--text); font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+a { color: inherit; text-decoration: none; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 20px;
+  padding: 14px 24px;
+  background: rgba(13, 17, 23, .85); backdrop-filter: blur(12px);
+  border-bottom: 1px solid #232a3b;
+}
+.logo { font-size: 22px; font-weight: 800; letter-spacing: 1px; white-space: nowrap; }
+.logo span { color: var(--accent); }
+
+.search-box { display: flex; flex: 1; max-width: 560px; margin: 0 auto; }
+.search-box input {
+  flex: 1; min-width: 0; padding: 10px 16px; font-size: 15px;
+  background: var(--card); color: var(--text);
+  border: 1px solid #2a3348; border-right: none;
+  border-radius: var(--radius) 0 0 var(--radius); outline: none;
+}
+.search-box input:focus { border-color: var(--accent); }
+.search-box button {
+  padding: 10px 22px; font-size: 15px; cursor: pointer; white-space: nowrap;
+  background: linear-gradient(135deg, var(--accent), #8a6cff);
+  color: #fff; border: none; border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+main { max-width: 1280px; margin: 0 auto; padding: 24px; min-height: calc(100vh - 130px); }
+
+/* 手机端顶栏: logo 一行不折行, 搜索框占满右侧 */
+@media (max-width: 640px) {
+  .topbar { padding: 10px 14px; gap: 12px; }
+  .logo { font-size: 18px; letter-spacing: 2.5px; }
+  .search-box { margin: 0; }
+  .search-box input { padding: 9px 12px; font-size: 14px; }
+  .search-box input::placeholder { font-size: 13px; }
+  .search-box button { padding: 9px 14px; font-size: 14px; }
+}
+
+.hot-wrap { margin: 18px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hot-wrap .hot-label { color: var(--danger); font-weight: 600; font-size: 14px; }
+.hot-tag {
+  padding: 5px 12px; font-size: 13px; cursor: pointer;
+  background: var(--bg2); border: 1px solid #2a3348; border-radius: 999px; color: var(--muted);
+  transition: all .15s;
+}
+.hot-tag:hover { color: var(--accent2); border-color: var(--accent2); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+.vcard { background: var(--card); border-radius: var(--radius); overflow: hidden; cursor: pointer; transition: transform .15s, background .15s; }
+.vcard:hover { transform: translateY(-4px); background: var(--card-hover); }
+.vcard .poster { position: relative; width: 100%; aspect-ratio: 2/3; background: var(--bg2); overflow: hidden; }
+.vcard .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vcard .badge {
+  position: absolute; right: 8px; top: 8px;
+  background: rgba(0,0,0,.65); color: #ffd257; font-size: 12px; font-weight: 700;
+  padding: 2px 8px; border-radius: 6px;
+}
+.vcard .cnt {
+  position: absolute; left: 8px; bottom: 8px;
+  background: rgba(0,0,0,.65); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 6px;
+}
+.vcard .info { padding: 10px 12px 12px; }
+.vcard .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vcard .meta { font-size: 12px; color: var(--muted); margin-top: 4px; display: flex; gap: 8px; }
+.vcard .tag { color: var(--accent2); }
+
+/* 播放页 */
+.play-layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
+@media (max-width: 900px) { .play-layout { grid-template-columns: 1fr; } }
+.player-box { background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 16/9; position: relative; }
+.player-box video { width: 100%; height: 100%; display: block; }
+.player-tip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); background: #000; font-size: 14px; }
+.detail h1 { font-size: 22px; margin: 16px 0 8px; }
+.detail .sub { color: var(--muted); font-size: 13px; line-height: 1.9; }
+.detail .sub b { color: var(--text); font-weight: 600; }
+
+.ep-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; max-height: 380px; overflow-y: auto; padding: 4px; }
+.ep {
+  text-align: center; padding: 8px 4px; font-size: 13px; cursor: pointer;
+  background: var(--bg2); border: 1px solid #2a3348; border-radius: 8px; color: var(--muted);
+}
+.ep:hover { border-color: var(--accent); color: var(--text); }
+.ep.active { background: linear-gradient(135deg, var(--accent), #8a6cff); color: #fff; border-color: transparent; font-weight: 600; }
+
+.section-title { margin: 24px 0 12px; font-size: 16px; border-left: 3px solid var(--accent); padding-left: 10px; }
+.reco-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+
+.center { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; color: var(--muted); text-align: center; }
+.spinner { width: 36px; height: 36px; border: 3px solid #2a3348; border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-art { font-size: 52px; margin-bottom: 14px; }
+
+.pager { display: flex; gap: 10px; justify-content: center; align-items: center; margin: 28px 0; }
+.pager button {
+  padding: 8px 20px; cursor: pointer; font-size: 14px;
+  background: var(--card); color: var(--text); border: 1px solid #2a3348; border-radius: 8px;
+}
+.pager button:disabled { opacity: .35; cursor: not-allowed; }
+.pager button:not(:disabled):hover { border-color: var(--accent); }
+.pager .cur { color: var(--muted); font-size: 14px; }
+
+.foot { text-align: center; color: #555d70; font-size: 12px; padding: 18px; }
+.toast {
+  position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+  background: #2a3348; color: #fff; padding: 10px 22px; border-radius: 8px; font-size: 14px; z-index: 99;
+  animation: fadein .2s;
+}
+@keyframes fadein { from { opacity: 0; } }

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>嗑瓜子 · 部署诊断</title>
+<style>
+  :root { --bg:#0d1117; --card:#1c2333; --text:#e6e9f0; --muted:#8b93a7; --ok:#38e1c2; --bad:#ff5c7a; --warn:#ffd257; --accent:#6c8cff; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; padding:24px; max-width:860px; margin:0 auto; }
+  h1 { font-size:20px; margin-bottom:6px; }
+  h1 span { color:var(--accent); }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  button.run { padding:10px 28px; font-size:15px; cursor:pointer; border:none; border-radius:8px; background:linear-gradient(135deg,var(--accent),#8a6cff); color:#fff; font-weight:600; }
+  button.run:disabled { opacity:.5; cursor:wait; }
+  .env { background:var(--card); border-radius:10px; padding:14px 16px; font-size:13px; color:var(--muted); margin:18px 0; line-height:1.9; word-break:break-all; }
+  .env b { color:var(--text); }
+  .item { background:var(--card); border-radius:10px; padding:14px 16px; margin:10px 0; }
+  .item .head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .item .name { font-weight:600; font-size:14px; }
+  .item .stat { font-size:13px; font-weight:700; white-space:nowrap; }
+  .item .stat.ok { color:var(--ok); } .item .stat.bad { color:var(--bad); } .item .stat.warn { color:var(--warn); }
+  .item .detail { margin-top:8px; font-size:12px; color:var(--muted); white-space:pre-wrap; word-break:break-all; background:#0a0e15; border-radius:8px; padding:10px; max-height:130px; overflow:auto; }
+  .verdict { margin-top:20px; padding:18px; border-radius:10px; font-size:14px; line-height:1.8; display:none; }
+  .verdict.ok { background:rgba(56,225,194,.08); border:1px solid var(--ok); }
+  .verdict.bad { background:rgba(255,92,122,.08); border:1px solid var(--bad); }
+  .verdict.warn { background:rgba(255,210,87,.08); border:1px solid var(--warn); }
+  .copy { margin-top:14px; padding:8px 18px; font-size:13px; cursor:pointer; background:var(--card); color:var(--text); border:1px solid #2a3348; border-radius:8px; }
+  .ms { color:var(--muted); font-weight:400; font-size:12px; }
+</style>
+</head>
+<body>
+  <h1>嗑瓜子 · <span>部署诊断</span></h1>
+  <div class="sub">自动检测静态资源 / Functions / 上游连通性，定位 "Unexpected end of JSON input" 类问题</div>
+  <button class="run" id="runBtn">开始诊断</button>
+  <div class="env" id="env"></div>
+  <div id="list"></div>
+  <div class="verdict" id="verdict"></div>
+  <button class="copy" id="copyBtn" style="display:none" onclick="copyAll()">📋 复制诊断结果（发给维护者）</button>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const ts = () => Date.now();
+const results = [];
+
+function envInfo() {
+  $("#env").innerHTML =
+    `页面地址: <b>${location.href}</b><br>` +
+    `前端构建: <b>${window.APP_BUILD || "未知(旧版页面)"}</b><br>` +
+    `UA: <b>${navigator.userAgent}</b>`;
+}
+
+function addItem(name) {
+  const div = document.createElement("div");
+  div.className = "item";
+  div.innerHTML = `<div class="head"><span class="name">${name}</span><span class="stat" id="st${results.length}">⏳ 进行中</span></div><div class="detail" id="dt${results.length}"></div>`;
+  $("#list").appendChild(div);
+  const idx = results.length;
+  results.push({ name, status: "运行中", detail: "", ms: 0 });
+  return {
+    set(status, ok, detail, ms) {
+      results[idx].status = status; results[idx].detail = detail || ""; results[idx].ms = ms || 0;
+      $("#st" + idx).textContent = status + (ms ? ` (${ms}ms)` : "");
+      $("#st" + idx).className = "stat " + (ok === true ? "ok" : ok === false ? "bad" : "warn");
+      $("#dt" + idx).textContent = detail || "";
+    },
+  };
+}
+
+async function fetchInfo(url, opts = {}, timeoutMs = 15000) {
+  const t0 = performance.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { ...opts, signal: ctrl.signal, cache: "no-store" });
+    const ms = Math.round(performance.now() - t0);
+    const ct = r.headers.get("content-type") || "(无content-type)";
+    let body = "";
+    try { body = await r.text(); } catch { body = "(body读取失败)"; }
+    return { ok: r.ok, status: r.status, ct, body, ms };
+  } finally { clearTimeout(timer); }
+}
+
+async function run() {
+  $("#runBtn").disabled = true;
+  $("#list").innerHTML = ""; results.length = 0;
+  $("#verdict").style.display = "none"; $("#copyBtn").style.display = "none";
+  envInfo();
+  let functionsOk = false, upstreamOk = false, searchOk = false, frontendOk = false, proxyOk = false;
+
+  try {
+    // ⓪ 子路径部署检测
+    const segs = location.pathname.split("/").filter(Boolean);
+    const subDeployed = segs.length > 1; // 例: /gzsite/debug = 2段 => 挂在子路径下
+    const t0 = addItem("⓪ 部署位置检测（站点是否挂在子路径下）");
+    t0.set(subDeployed ? "⚠ 子路径部署" : "✓ 根路径部署", !subDeployed,
+      `当前路径: ${location.pathname}\n路径段: ${JSON.stringify(segs)}` +
+      (subDeployed ? `\n→ 站点挂在 /${segs[0]}/ 下！CF Pages Functions 只能在域名根路径工作。\n  这正是 Functions 404 的根源。\n  修复: 解压后进入文件夹内部, 对文件夹本身执行部署\n  (wrangler pages deploy . 或 Dashboard 拖拽该文件夹, 而不是它的上级目录)` : ""));
+
+    // 1. 前端版本检测
+    const t1 = addItem("① 前端代码版本（是否加载了最新 app.js）");
+    try {
+      const r = await fetchInfo("app.js?_=" + ts());
+      const hasBuild = r.body.includes("gz-20261014");
+      const hasHard = r.body.includes("Functions 未生效");
+      frontendOk = r.ok && hasBuild;
+      t1.set(hasBuild ? "✓ 最新" : "⚠ 旧版", hasBuild ? true : null,
+        `HTTP ${r.status} | ${r.ms}ms\n包含新版本标记: ${hasBuild}\n包含错误处理代码: ${hasHard}\n` +
+        (hasBuild ? "" : "→ 浏览器缓存了旧JS或部署的不是新代码。强刷(Ctrl+Shift+R)或重新部署。"));
+    } catch (e) { t1.set("✗ 失败", false, String(e)); }
+
+    // 2. Functions 探测 (GET /api/health)
+    const t2 = addItem("② Functions 存在性 (GET /api/health)");
+    try {
+      const r = await fetchInfo("api/health?_=" + ts());
+      const isJson = r.ct.includes("json");
+      functionsOk = isJson && r.body.includes('"ok":true');
+      t2.set(functionsOk ? "✓ 后端正常" : "✗ 后端未生效", functionsOk,
+        `HTTP ${r.status} | ${r.ms}ms | content-type: ${r.ct}\nbody前200字符: ${r.body.slice(0, 200)}\n` +
+        (functionsOk ? "" : "→ /api/health 返回了 HTML(index.html), 说明 _worker.js 没有随站点部署。\n  确认部署的文件夹根目录包含 _worker.js 文件, 重新部署后再测。"));
+    } catch (e) { t2.set("✗ 请求失败", false, String(e)); }
+
+    // 3. Functions POST 通路
+    const t3 = addItem("③ Functions POST 通路 (POST /api/video 非法路径→期待403)");
+    if (functionsOk) {
+      try {
+        const r = await fetchInfo("api/video?_=" + ts(), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "/__probe__", payload: {} }),
+        });
+        const pass = r.status === 403 && r.body.includes("not allowed");
+        t3.set(pass ? "✓ 正常" : "⚠ 异常", pass,
+          `HTTP ${r.status} | ${r.ms}ms\nbody: ${r.body.slice(0, 200)}`);
+      } catch (e) { t3.set("✗ 失败", false, String(e)); }
+    } else t3.set("－ 跳过", null, "依赖②通过");
+
+    // 4. 上游连通性
+    const t4 = addItem("④ 上游连通性 (ShowHots 热搜接口)");
+    if (functionsOk) {
+      try {
+        const r = await fetchInfo("api/video?_=" + ts(), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "/Pc/Search/ShowHots", payload: {} }),
+        }, 40000);
+        let code = "?", n = 0;
+        try { const j = JSON.parse(r.body); code = j.code; n = Array.isArray(j.data) ? j.data.length : 0; } catch {}
+        upstreamOk = code === 200;
+        t4.set(upstreamOk ? "✓ 上游可达" : "⚠ 上游异常", upstreamOk,
+          `HTTP ${r.status} | ${r.ms}ms | 业务code: ${code} | 热词数: ${n}\nbody前150: ${r.body.slice(0, 150)}\n` +
+          (upstreamOk ? "" : "→ 上游限流或被CF拦截，重试几次；若持续失败需换上游域名"));
+      } catch (e) { t4.set("✗ 失败", false, String(e)); }
+    } else t4.set("－ 跳过", null, "依赖②通过");
+
+    // 5. 搜索功能
+    const t5 = addItem("⑤ 搜索功能 (GetConditionList 仙逆)");
+    if (functionsOk && upstreamOk) {
+      try {
+        const r = await fetchInfo("api/video?_=" + ts(), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "/Pc/Search/GetConditionList", payload: { tid: 0, area: 0, year: 0, sort: "d_id", keywords: "仙逆", page: 1, pageSize: 20 } }),
+        }, 45000);
+        let code = "?", total = "?", n = 0;
+        try { const j = JSON.parse(r.body); code = j.code; total = (j.data || {}).total; n = ((j.data || {}).list || []).length; } catch {}
+        searchOk = code === 200 && n > 0;
+        t5.set(searchOk ? "✓ 搜索正常" : "⚠ 搜索异常", searchOk,
+          `HTTP ${r.status} | ${r.ms}ms | 业务code: ${code} | total: ${total} | 返回条数: ${n}\nbody前150: ${r.body.slice(0, 150)}`);
+      } catch (e) { t5.set("✗ 失败", false, String(e)); }
+    } else t5.set("－ 跳过", null, "依赖④通过");
+
+    // 6. m3u8 代理
+    const t6 = addItem("⑥ 视频代理 (GET /api/proxy)");
+    if (functionsOk) {
+      try {
+        const r = await fetchInfo("api/proxy?url=" + encodeURIComponent("https://www.cloudflare.com/cdn-cgi/trace") + "&_=" + ts());
+        proxyOk = r.ok && r.body.includes("fl=");
+        t6.set(proxyOk ? "✓ 代理正常" : "⚠ 异常", proxyOk,
+          `HTTP ${r.status} | ${r.ms}ms\nbody前120: ${r.body.slice(0, 120).replace(/\n/g, " ⏎ ")}`);
+      } catch (e) { t6.set("✗ 失败", false, String(e)); }
+    } else t6.set("－ 跳过", null, "依赖②通过");
+
+    // 结论
+    const v = $("#verdict");
+    v.style.display = "block";
+    if (subDeployed) {
+      v.className = "verdict bad";
+      v.innerHTML = "<b>结论：站点被部署在子路径 " + location.pathname.replace(/\/[^/]*\/?$/, "/") + " 下 —— 后端无法在子路径工作。</b><br>" +
+        "你现在的页面在 <code>" + location.pathname + "</code>，说明部署根选成了外层目录。<br>" +
+        "→ 修复：把 <b>包含 index.html 和 _worker.js 的文件夹本身</b> 作为部署根：<br>" +
+        "① 解压 zip，进入能看到 index.html 的文件夹内部<br>" +
+        "② Dashboard 拖拽上传该文件夹（_worker.js 拖拽也支持）或执行 <code>npx wrangler pages deploy .</code><br>" +
+        "③ 部署完成后打开 <code>https://xxx.pages.dev/</code>，回本页重新诊断。";
+    } else if (!frontendOk) {
+      v.className = "verdict warn";
+      v.innerHTML = "<b>结论：前端代码不是最新。</b>浏览器缓存了旧 app.js 或部署的不是最新文件。<br>→ 强制刷新（Ctrl+Shift+R）；仍不行则用 wrangler pages deploy . 重新部署后再试。";
+    } else if (!functionsOk) {
+      v.className = "verdict bad";
+      v.innerHTML = "<b>结论：后端(_worker.js)未生效 —— 这就是你搜索报错的原因。</b><br>" +
+        "/api/health 返回了 HTML（站点首页）而不是 JSON，说明部署里没有 _worker.js。<br>" +
+        "→ 修复：确认部署的文件夹<b>根目录</b>包含 <code>_worker.js</code> 文件，然后重新部署：<br>" +
+        "Dashboard 拖拽该文件夹（支持 _worker.js），或 <code>npx wrangler pages deploy .</code><br>" +
+        "部署后回本页重新诊断。";
+    } else if (!upstreamOk) {
+      v.className = "verdict warn";
+      v.innerHTML = "<b>结论：Functions 正常，但上游接口当前不可达/限流。</b><br>→ 等几分钟后重试诊断；若长期如此需更换上游。";
+    } else if (!searchOk) {
+      v.className = "verdict warn";
+      v.innerHTML = "<b>结论：上游可达但搜索接口异常。</b>详情看第⑤项。";
+    } else if (!proxyOk) {
+      v.className = "verdict warn";
+      v.innerHTML = "<b>结论：搜索可用，视频代理异常。</b>播放可能受影响，详情看第⑥项。";
+    } else {
+      v.className = "verdict ok";
+      v.innerHTML = "<b>结论：全部通过，站点应可正常使用。</b>若个别时刻仍报错，是上游间歇限流，稍后重试即可。";
+    }
+    $("#copyBtn").style.display = "inline-block";
+  } finally {
+    $("#runBtn").disabled = false;
+    $("#runBtn").textContent = "重新诊断";
+  }
+}
+
+function copyAll() {
+  let out = `【嗑瓜子部署诊断】${new Date().toLocaleString()}\n页面: ${location.href}\n前端构建: ${window.APP_BUILD || "未知"}\nUA: ${navigator.userAgent}\n\n`;
+  results.forEach((r, i) => {
+    out += `${i + 1}. ${r.name}\n   状态: ${r.status} (${r.ms}ms)\n   ${r.detail.split("\n").join("\n   ")}\n\n`;
+  });
+  navigator.clipboard.writeText(out).then(
+    () => alert("已复制到剪贴板"),
+    () => { const ta = document.createElement("textarea"); ta.value = out; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); alert("已复制"); }
+  );
+}
+
+$("#runBtn").addEventListener("click", run);
+envInfo();
+</script>
+</body>
+</html>
