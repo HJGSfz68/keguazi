@@ -84,6 +84,14 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; min-height: calc(100vh 
 .player-box { background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 16/9; position: relative; }
 .player-box video { width: 100%; height: 100%; display: block; }
 .player-tip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); background: #000; font-size: 14px; }
+.player-bar { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.player-bar select {
+  background: var(--card); color: var(--text);
+  border: 1px solid #2a3348; border-radius: 8px;
+  padding: 7px 12px; font-size: 13px; cursor: pointer; outline: none;
+  transition: border-color .15s;
+}
+.player-bar select:hover, .player-bar select:focus { border-color: var(--accent); }
 .detail h1 { font-size: 22px; margin: 16px 0 8px; }
 .detail .sub { color: var(--muted); font-size: 13px; line-height: 1.9; }
 .detail .sub b { color: var(--text); font-weight: 600; }
@@ -97,6 +105,29 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; min-height: calc(100vh 
 .ep.active { background: linear-gradient(135deg, var(--accent), #8a6cff); color: #fff; border-color: transparent; font-weight: 600; }
 
 .section-title { margin: 24px 0 12px; font-size: 16px; border-left: 3px solid var(--accent); padding-left: 10px; }
+
+/* 继续观看（本地观看记录） */
+.hist-clear { float: right; font-size: 12px; font-weight: 400; color: var(--muted); cursor: pointer; }
+.hist-clear:hover { color: var(--danger); }
+.hist-grid {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 148px;
+  gap: 14px; overflow-x: auto; padding: 4px 2px 10px;
+}
+.hist-grid::-webkit-scrollbar { height: 6px; }
+.hist-grid::-webkit-scrollbar-thumb { background: #2a3348; border-radius: 3px; }
+.hist-card { position: relative; background: var(--card); border-radius: var(--radius); overflow: hidden; }
+.hist-card .poster { width: 100%; aspect-ratio: 2/3; background: var(--bg2); overflow: hidden; }
+.hist-card .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hist-card .hist-info { padding: 8px 10px 10px; }
+.hist-card .hist-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist-card .hist-meta { font-size: 12px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist-card .hist-del {
+  position: absolute; right: 6px; top: 6px; width: 22px; height: 22px;
+  line-height: 22px; text-align: center; border-radius: 50%;
+  background: rgba(0,0,0,.65); color: #fff; font-size: 11px; cursor: pointer; display: none;
+}
+.hist-card:hover .hist-del { display: block; }
+.hist-card .hist-del:hover { background: var(--danger); }
 .reco-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
 
 .center { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; color: var(--muted); text-align: center; }

@@ -1,6 +1,6 @@
 /* 嗑瓜子 SPA — hash 路由 */
-/* BUILD: gz-20261014-b2 */
-window.APP_BUILD = window.APP_BUILD || "gz-20261014-b2";
+/* BUILD: gz-20261019-b5 */
+window.APP_BUILD = window.APP_BUILD || "gz-20261019-b5";
 const $app = document.getElementById("app");
 const $input = document.getElementById("searchInput");
 const $form = document.getElementById("searchForm");
@@ -48,6 +48,44 @@ const getPlayList = (vurlId, vodId) => api("/Pc/Resource/GetOnePlayList", { vurl
 
 const imgProxy = (u) => u ? "api/img?u=" + encodeURIComponent(u) : "";
 const proxy = (u) => "api/proxy?url=" + encodeURIComponent(u);
+
+/* ---------- 观看记录（浏览器本地 localStorage） ---------- */
+const HISTORY_KEY = "gz_watch_history";
+const HISTORY_MAX = 50;
+
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
+}
+
+function saveHistory(vodId, name, pic, ep) {
+  let list = getHistory().filter((h) => String(h.vod_id) !== String(vodId));
+  list.unshift({ vod_id: String(vodId), name: name || "", pic: pic || "", ep: ep || null, ts: Date.now() });
+  if (list.length > HISTORY_MAX) list.length = HISTORY_MAX;
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch {}
+}
+
+function removeHistory(vodId) {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(getHistory().filter((h) => String(h.vod_id) !== String(vodId)))); } catch {}
+}
+
+function clearHistory() {
+  try { localStorage.removeItem(HISTORY_KEY); } catch {}
+}
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s / 60) + "分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + "小时前";
+  if (s < 86400 * 7) return Math.floor(s / 86400) + "天前";
+  const d = new Date(ts);
+  return (d.getMonth() + 1) + "月" + d.getDate() + "日";
+}
 
 /* ---------- 工具 ---------- */
 function toast(msg) {
@@ -123,9 +161,40 @@ async function render() {
 
 /* ---------- 首页 ---------- */
 async function viewHome() {
+  // 继续观看（本地观看记录）
+  const hist = getHistory();
+  let histHtml = "";
+  if (hist.length) {
+    histHtml = `
+      <div class="section-title" style="margin-top:0">继续观看<span class="hist-clear" id="histClear">清空</span></div>
+      <div class="hist-grid">${hist.map((h) => `
+        <div class="hist-card">
+          <a href="#/p/${h.vod_id}${h.ep && h.ep.vurl_id ? "/" + h.ep.vurl_id : ""}">
+            <div class="poster"><img loading="lazy" src="${imgProxy(h.pic)}" onerror="this.style.opacity=0"></div>
+            <div class="hist-info">
+              <div class="hist-name">${escHtml(h.name)}</div>
+              <div class="hist-meta">${h.ep ? "看到第 " + escHtml(h.ep.epName) + " 集 · " : ""}${timeAgo(h.ts)}</div>
+            </div>
+          </a>
+          <span class="hist-del" data-vid="${h.vod_id}" title="删除这条记录">✕</span>
+        </div>`).join("")}</div>`;
+  }
   $app.innerHTML = `<div class="center"><div class="empty-art">🎬</div>
     <h2 style="color:var(--text);margin-bottom:8px">搜你想看的</h2>
-    <p>电影 · 电视剧 · 动漫 · 综艺 · 短剧</p></div><div id="hotArea"></div>`;
+    <p>电影 · 电视剧 · 动漫 · 综艺 · 短剧</p></div>${histHtml}<div id="hotArea"></div>`;
+
+  // 历史区交互：单条删除 / 清空
+  document.querySelectorAll(".hist-del").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      removeHistory(el.dataset.vid);
+      render();
+    }));
+  const clearBtn = document.getElementById("histClear");
+  if (clearBtn) clearBtn.addEventListener("click", () => {
+    if (confirm("确定清空全部观看记录？")) { clearHistory(); render(); }
+  });
+
   try {
     const hots = await showHots();
     const tags = (Array.isArray(hots) ? hots : [])
@@ -226,6 +295,12 @@ async function viewPlay(vodId, vurlId, epQ) {
   const cur = eps[curIdx] || {};
 
   document.title = (v.vod_name || "播放") + (cur.name ? ` 第${cur.name}集` : "");
+
+  // 写入观看记录（浏览器本地）：记下最后看到的一集，供首页"继续观看"回跳
+  try {
+    saveHistory(vodId, v.vod_name, v.vod_pic,
+      cur.vurl_id ? { vurl_id: String(cur.vurl_id), epName: cur.name || "正片" } : null);
+  } catch {}
   const actors = v.vod_actor ? v.vod_actor.split(",").slice(0, 6).join(" / ") : "";
   $app.innerHTML = `
     <div class="play-layout">
@@ -233,6 +308,17 @@ async function viewPlay(vodId, vurlId, epQ) {
         <div class="player-box">
           <video id="player" controls autoplay playsinline></video>
           <div class="player-tip" id="playerTip">视频加载中…</div>
+        </div>
+        <div class="player-bar">
+          <select id="qualitySel" style="display:none" title="清晰度"><option value="-1">自动</option></select>
+          <select id="speedSel" title="倍速播放">
+            <option value="0.5">0.5x</option>
+            <option value="0.75">0.75x</option>
+            <option value="1">1.0x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2.0x</option>
+          </select>
         </div>
         <div class="detail">
           <h1>${(v.vod_name || "").trim()} ${cur.name ? `<span style="color:var(--accent);font-size:15px">第 ${cur.name} 集</span>` : ""}</h1>
@@ -260,25 +346,63 @@ async function viewPlay(vodId, vurlId, epQ) {
       location.hash = `#/p/${vodId}/${eps[i].vurl_id}`;
     }));
 
-  // 播放
+  // 播放（含清晰度切换 + 倍速记忆）
   if (!cur.url) return;
   const video = document.getElementById("player");
   const tip = document.getElementById("playerTip");
+  const qualitySel = document.getElementById("qualitySel");
+  const speedSel = document.getElementById("speedSel");
   const src = proxy(cur.url);
+
+  const SPEED_KEY = "gz_playback_rate";
+  const levelLabel = (l) => (l.height ? l.height + "p" : Math.round((l.bitrate || 0) / 1000) + "kbps");
+  const applyRate = () => { video.playbackRate = Number(localStorage.getItem(SPEED_KEY)) || 1; };
+
+  // 倍速：记住用户选择，换集后依然生效
+  speedSel.value = localStorage.getItem(SPEED_KEY) || "1";
+  speedSel.addEventListener("change", () => {
+    const r = Number(speedSel.value) || 1;
+    localStorage.setItem(SPEED_KEY, String(r));
+    video.playbackRate = r;
+  });
+  applyRate();
+
   if (window.Hls && Hls.isSupported()) {
     hls = new Hls({ maxBufferLength: 30 });
     hls.loadSource(src);
     hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => { tip.style.display = "none"; video.play().catch(() => {}); });
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      tip.style.display = "none";
+      applyRate();
+      video.play().catch(() => {});
+      // 多码率源才显示清晰度菜单；单码率源（当前源）保持隐藏
+      const lv = hls.levels || [];
+      if (lv.length > 1) {
+        qualitySel.innerHTML = '<option value="-1">自动</option>' +
+          lv.map((l, i) => `<option value="${i}">${levelLabel(l)}</option>`).join("");
+        qualitySel.style.display = "";
+      }
+    });
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
+      // 自动档时在"自动"选项里实时显示当前正在播的档位
+      const l = hls.levels && hls.levels[d.level];
+      if (l && hls.autoLevelEnabled && qualitySel.options[0]) {
+        qualitySel.options[0].textContent = "自动(" + levelLabel(l) + ")";
+      }
+    });
     hls.on(Hls.Events.ERROR, (_, d) => {
       if (d.fatal) {
         tip.textContent = "视频加载失败，请稍后重试或换一集";
         tip.style.display = "flex";
       }
     });
+    qualitySel.addEventListener("change", () => {
+      hls.currentLevel = Number(qualitySel.value); // -1 = 回到自动档
+    });
   } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    // Safari 原生 HLS：清晰度由系统接管（菜单保持隐藏），倍速仍可用
     video.src = src;
-    video.addEventListener("loadedmetadata", () => { tip.style.display = "none"; });
+    video.addEventListener("loadedmetadata", () => { tip.style.display = "none"; applyRate(); });
   } else {
     tip.textContent = "当前浏览器不支持 HLS 播放";
   }
