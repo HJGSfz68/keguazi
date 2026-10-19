@@ -1,6 +1,6 @@
 /* 嗑瓜子 SPA — hash 路由 */
-/* BUILD: gz-20261019-b5 */
-window.APP_BUILD = window.APP_BUILD || "gz-20261019-b5";
+/* BUILD: gz-20261019-b7 */
+window.APP_BUILD = window.APP_BUILD || "gz-20261019-b7";
 const $app = document.getElementById("app");
 const $input = document.getElementById("searchInput");
 const $form = document.getElementById("searchForm");
@@ -70,10 +70,13 @@ function saveHistory(vodId, name, pic, ep) {
 }
 
 function removeHistory(vodId) {
+  const target = getHistory().find((h) => String(h.vod_id) === String(vodId));
+  if (target && target.pic) picDelete(target.pic); // 同步清封面缓存
   try { localStorage.setItem(HISTORY_KEY, JSON.stringify(getHistory().filter((h) => String(h.vod_id) !== String(vodId)))); } catch {}
 }
 
 function clearHistory() {
+  getHistory().forEach((h) => { if (h.pic) picDelete(h.pic); }); // 同步清封面缓存
   try { localStorage.removeItem(HISTORY_KEY); } catch {}
 }
 
@@ -85,6 +88,77 @@ function timeAgo(ts) {
   if (s < 86400 * 7) return Math.floor(s / 86400) + "天前";
   const d = new Date(ts);
   return (d.getMonth() + 1) + "月" + d.getDate() + "日";
+}
+
+/* ---------- 封面缓存（IndexedDB 存 Blob，本地离线可读） ---------- */
+const PIC_DB = "gz_cache";
+const PIC_STORE = "posters";
+const PIC_TTL = 30 * 24 * 3600 * 1000; // 30 天
+const PIC_MAX_SIZE = 2 * 1024 * 1024;  // 超过 2MB 的异常图不入缓存
+
+function picDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(PIC_DB, 1);
+    r.onupgradeneeded = () => {
+      if (!r.result.objectStoreNames.contains(PIC_STORE)) r.result.createObjectStore(PIC_STORE);
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+
+async function picGet(url) {
+  try {
+    const db = await picDB();
+    return await new Promise((res) => {
+      const rq = db.transaction(PIC_STORE).objectStore(PIC_STORE).get(url);
+      rq.onsuccess = () => res(rq.result && Date.now() - rq.result.t < PIC_TTL ? rq.result.v : null);
+      rq.onerror = () => res(null);
+    });
+  } catch { return null; }
+}
+
+async function picSet(url, blob) {
+  try {
+    const db = await picDB();
+    db.transaction(PIC_STORE, "readwrite").objectStore(PIC_STORE).put({ v: blob, t: Date.now() }, url);
+  } catch {}
+}
+
+async function picDelete(url) {
+  try {
+    const db = await picDB();
+    db.transaction(PIC_STORE, "readwrite").objectStore(PIC_STORE).delete(url);
+  } catch {}
+}
+
+/* 拿封面 Blob：命中缓存直接回；未命中走图片代理拉取并补存。失败返回 null（调用方兜底走代理地址） */
+async function picBlob(url) {
+  if (!url) return null;
+  const hit = await picGet(url);
+  if (hit) return hit;
+  try {
+    const r = await fetch(imgProxy(url));
+    if (r.ok) {
+      const b = await r.blob();
+      if (b.size && b.size < PIC_MAX_SIZE) { picSet(url, b); return b; }
+    }
+  } catch {}
+  return null;
+}
+
+/* 清理过期封面（数量级 ≤50，首页渲染时顺带跑一次） */
+async function picCleanup() {
+  try {
+    const db = await picDB();
+    const rq = db.transaction(PIC_STORE, "readwrite").objectStore(PIC_STORE).openCursor();
+    rq.onsuccess = () => {
+      const c = rq.result;
+      if (!c) return;
+      if (!c.value || Date.now() - c.value.t > PIC_TTL) c.delete();
+      c.continue();
+    };
+  } catch {}
 }
 
 /* ---------- 工具 ---------- */
@@ -107,12 +181,13 @@ function errorBox(msg, backHash) {
 
 function vodCard(v) {
   const score = v.vod_scroe && v.vod_scroe !== "0" ? v.vod_scroe : "";
+  const cont = v.new_continue || v.vod_continu || ""; // 详情/列表字段名不同，兜底
   const tag = (v.tags && v.tags[0]) || v.vod_area || "";
   return `<a class="vcard" href="#/p/${v.vod_id}">
     <div class="poster">
       <img loading="lazy" src="${imgProxy(v.vod_pic)}" onerror="this.style.opacity=0">
       ${score ? `<span class="badge">${score}</span>` : ""}
-      ${v.new_continue ? `<span class="cnt">${v.new_continue}</span>` : ""}
+      ${cont ? `<span class="cnt">${cont}</span>` : ""}
     </div>
     <div class="info">
       <div class="name">${(v.vod_name || "").trim()}</div>
@@ -143,8 +218,11 @@ function destroyPlayer() {
 }
 
 let pageState = { destroy: null };
+let liveObjectURLs = []; // 本页创建的 blob: URL，切页时统一回收
 
 async function render() {
+  liveObjectURLs.forEach((u) => { try { URL.revokeObjectURL(u); } catch {} });
+  liveObjectURLs = [];
   destroyPlayer();
   if (pageState.destroy) { try { pageState.destroy(); } catch {} pageState.destroy = null; }
   const { path, q } = parseHash();
@@ -159,6 +237,15 @@ async function render() {
   $app.innerHTML = errorBox("页面不存在", "#/");
 }
 
+/* 封面填充：优先 IndexedDB 缓存直出，未命中走图片代理并补存 */
+async function fillPoster(img) {
+  const u = img.dataset.pic;
+  if (!u) return;
+  const b = await picBlob(u);
+  if (b) { const o = URL.createObjectURL(b); liveObjectURLs.push(o); img.src = o; }
+  else img.src = imgProxy(u);
+}
+
 /* ---------- 首页 ---------- */
 async function viewHome() {
   // 继续观看（本地观看记录）
@@ -170,7 +257,7 @@ async function viewHome() {
       <div class="hist-grid">${hist.map((h) => `
         <div class="hist-card">
           <a href="#/p/${h.vod_id}${h.ep && h.ep.vurl_id ? "/" + h.ep.vurl_id : ""}">
-            <div class="poster"><img loading="lazy" src="${imgProxy(h.pic)}" onerror="this.style.opacity=0"></div>
+            <div class="poster"><img loading="lazy" data-pic="${escHtml(h.pic || "")}" data-vid="${h.vod_id}" onerror="this.style.opacity=0"></div>
             <div class="hist-info">
               <div class="hist-name">${escHtml(h.name)}</div>
               <div class="hist-meta">${h.ep ? "看到第 " + escHtml(h.ep.epName) + " 集 · " : ""}${timeAgo(h.ts)}</div>
@@ -194,6 +281,28 @@ async function viewHome() {
   if (clearBtn) clearBtn.addEventListener("click", () => {
     if (confirm("确定清空全部观看记录？")) { clearHistory(); render(); }
   });
+
+  // 封面：优先读 IndexedDB 本地缓存，未命中走图片代理拉取并补存
+  document.querySelectorAll("img[data-pic]").forEach(fillPoster);
+
+  // 旧记录自愈：升级前存的记录 pic 为空（旧字段名 bug），后台补拉详情把海报补上
+  hist.forEach(async (h) => {
+    if (h.pic) return;
+    try {
+      const info = await getVodInfo(h.vod_id);
+      const nv = (info.vodInfo || {}).pic || (info.vodInfo || {}).vod_pic;
+      if (!nv) return;
+      const list = getHistory();
+      const it = list.find((x) => String(x.vod_id) === String(h.vod_id));
+      if (it && !it.pic) {
+        it.pic = nv;
+        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch {}
+      }
+      const img = document.querySelector(`img[data-vid="${h.vod_id}"]`);
+      if (img && !img.dataset.pic) { img.dataset.pic = nv; fillPoster(img); }
+    } catch {}
+  });
+  picCleanup();
 
   try {
     const hots = await showHots();
@@ -297,10 +406,14 @@ async function viewPlay(vodId, vurlId, epQ) {
   document.title = (v.vod_name || "播放") + (cur.name ? ` 第${cur.name}集` : "");
 
   // 写入观看记录（浏览器本地）：记下最后看到的一集，供首页"继续观看"回跳
+  // 注意：详情接口海报字段是 pic（搜索列表才叫 vod_pic），两者兜底
   try {
-    saveHistory(vodId, v.vod_name, v.vod_pic,
+    saveHistory(vodId, v.vod_name, v.pic || v.vod_pic || "",
       cur.vurl_id ? { vurl_id: String(cur.vurl_id), epName: cur.name || "正片" } : null);
   } catch {}
+  // 顺手把封面拉进本地缓存（IndexedDB），下次回首页秒出图
+  const histPic = v.pic || v.vod_pic;
+  if (histPic) picBlob(histPic).catch(() => {});
   const actors = v.vod_actor ? v.vod_actor.split(",").slice(0, 6).join(" / ") : "";
   $app.innerHTML = `
     <div class="play-layout">
@@ -324,7 +437,7 @@ async function viewPlay(vodId, vurlId, epQ) {
           <h1>${(v.vod_name || "").trim()} ${cur.name ? `<span style="color:var(--accent);font-size:15px">第 ${cur.name} 集</span>` : ""}</h1>
           <div class="sub">
             ${v.vod_scroe ? `<b>评分</b> ${v.vod_scroe}　` : ""}${v.vod_year ? `<b>年份</b> ${v.vod_year}　` : ""}${v.vod_area ? `<b>地区</b> ${v.vod_area}　` : ""}
-            ${v.new_continue ? `<b>进度</b> ${v.new_continue}` : ""}
+            ${(v.new_continue || v.vod_continu) ? `<b>进度</b> ${v.new_continue || v.vod_continu}　` : ""}
             ${actors ? `<br><b>主演</b> ${actors}` : ""}
             ${v.vod_director ? `<br><b>导演</b> ${v.vod_director}` : ""}
           </div>
